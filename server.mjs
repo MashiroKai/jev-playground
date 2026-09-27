@@ -2,9 +2,13 @@
 //
 // Serves the single-page WebUI from public/ and exposes one forwarding
 // endpoint (POST /api/evaluate) that relays browser requests to the TypeSafe
-// JeV API. The API key never reaches the browser: it is read once at startup
-// from the file below and kept only in this process's memory. Logs carry
-// request/response metadata only, with the Authorization header redacted.
+// JeV API. The API key never reaches the browser: it is read at startup from
+// the file below (a missing or empty file no longer stops the server — it
+// starts unconfigured) and kept only in this process's memory. The key can be
+// replaced at runtime via POST /api/config/api-key: a write-only channel whose
+// responses and logs carry only ok/length/last-4 fingerprint, never the value.
+// Logs carry request/response metadata only, with the Authorization header
+// redacted.
 //
 // Start: node server.mjs   (or: npm start)
 // Env overrides: PORT (default 8791), HOST (default 127.0.0.1),
@@ -12,7 +16,18 @@
 //                JEV_MAX_LIFETIME_MS (optional hard self-exit deadline, ms).
 
 import http from 'node:http';
-import { readFileSync } from 'node:fs';
+import {
+  chmodSync,
+  closeSync,
+  fsyncSync,
+  ftruncateSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  statSync,
+  writeFileSync,
+  writeSync,
+} from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -35,15 +50,130 @@ function loadApiKey() {
   return readFileSync(API_KEY_PATH, 'utf8').trim();
 }
 
-let API_KEY;
+// null = not configured. A missing, empty or unreadable key file no longer
+// stops the server: it starts unconfigured so the WebUI settings can provide
+// a key at runtime (no restart needed).
+let API_KEY = null;
 try {
-  API_KEY = loadApiKey();
+  API_KEY = loadApiKey() || null; // an empty file counts as not configured
 } catch (err) {
   console.error(
     `[jev-test2] cannot read API key file at ${API_KEY_PATH}: ${err.message}`
   );
-  console.error('[jev-test2] put one bare key line in that file and restart.');
-  process.exit(1);
+}
+
+// --- API key runtime configuration (write-only channel) ----------------------
+// POST /api/config/api-key         { apiKey } -> { ok, length, fingerprint }
+// GET  /api/config/api-key/status             -> { configured }
+// The value is validated, persisted with 0600 owner-only permissions and kept
+// in memory only. It is never echoed back, never logged, never cached in the
+// page: responses and log entries carry only route/status/length/fingerprint.
+
+const API_KEY_MIN_LEN = 8;
+const API_KEY_MAX_LEN = 4096;
+
+function apiKeyConfigured() {
+  return API_KEY !== null;
+}
+
+function apiKeyFingerprint(key) {
+  return `…${key.slice(-4)}`;
+}
+
+// Persist with 0600 owner-only permissions. When the file already exists it
+// is rewritten in place (open 'r+', write, truncate, fsync, close) so the
+// inode is preserved; a failed write never touches the in-memory key.
+function persistApiKey(key) {
+  const body = Buffer.from(key, 'utf8');
+  let before = null;
+  try {
+    before = statSync(API_KEY_PATH);
+  } catch {
+    before = null; // no file yet: create it below
+  }
+  mkdirSync(path.dirname(API_KEY_PATH), { recursive: true });
+  if (before) {
+    const fd = openSync(API_KEY_PATH, 'r+');
+    try {
+      writeSync(fd, body, 0, body.length, 0);
+      ftruncateSync(fd, body.length);
+      fsyncSync(fd);
+    } finally {
+      closeSync(fd);
+    }
+    chmodSync(API_KEY_PATH, 0o600);
+    const after = statSync(API_KEY_PATH);
+    if (after.ino !== before.ino) {
+      console.error(
+        `[jev-test2] warning: API key file inode changed during in-place write (was ${before.ino}, now ${after.ino})`
+      );
+    }
+  } else {
+    writeFileSync(API_KEY_PATH, body, { mode: 0o600 });
+    chmodSync(API_KEY_PATH, 0o600);
+  }
+}
+
+async function handleSetApiKey(req, res) {
+  const startedAt = new Date().toISOString();
+  const t0 = Date.now();
+  let status = 400; // request-side problems answer 400
+  let note = null;
+  let length = null;
+  let parsed;
+  try {
+    try {
+      parsed = JSON.parse(await readBody(req));
+    } catch {
+      // Fixed message on purpose: JSON.parse errors can quote body fragments.
+      throw new Error('request body must be JSON: {"apiKey":"..."}');
+    }
+    const raw = typeof parsed.apiKey === 'string' ? parsed.apiKey : '';
+    const key = raw.trim();
+    if (key === '') {
+      note = 'rejected: apiKey must be a non-empty string';
+      throw new Error('"apiKey" must be a non-empty string');
+    }
+    if (/[\r\n]/.test(key)) {
+      note = 'rejected: apiKey must be a single line';
+      throw new Error('"apiKey" must be a single line (no embedded newlines)');
+    }
+    if (key.length < API_KEY_MIN_LEN || key.length > API_KEY_MAX_LEN) {
+      note = `rejected: apiKey length must be ${API_KEY_MIN_LEN}..${API_KEY_MAX_LEN} after trim`;
+      throw new Error(
+        `"apiKey" length must be between ${API_KEY_MIN_LEN} and ${API_KEY_MAX_LEN} characters`
+      );
+    }
+    try {
+      persistApiKey(key);
+    } catch (persistErr) {
+      status = 500; // disk-level failure: the in-memory key is untouched
+      note = `api key persist failed: ${persistErr.message}`;
+      throw new Error('failed to store the API key');
+    }
+    API_KEY = key; // next evaluate uses the new value immediately, no restart
+    status = 200;
+    length = key.length;
+    note = `api key updated via settings endpoint (length ${length})`;
+    sendJson(res, 200, {
+      ok: true,
+      length,
+      fingerprint: apiKeyFingerprint(key),
+    });
+  } catch (err) {
+    if (note === null) note = `rejected: ${err.message}`;
+    sendJson(res, status, { error: err.message });
+  } finally {
+    logMetadata({
+      time: startedAt,
+      route: 'POST /api/config/api-key',
+      status,
+      latency_ms: Date.now() - t0,
+      auth: 'Authorization: Bearer ***',
+      length,
+      note,
+    });
+  }
 }
 
 // Optional hard self-exit deadline (belt for supervised verify runs; the
@@ -137,6 +267,27 @@ async function handleEvaluate(req, res) {
   let upstreamStatus = null;
   let errorNote = null;
 
+  // Unconfigured: answer with a clear, actionable error instead of attempting
+  // an upstream call that cannot succeed. No key-shaped string can appear in
+  // this response — there is no key yet.
+  if (!apiKeyConfigured()) {
+    await readBody(req).catch(() => ''); // drain the body, then answer
+    errorNote = 'not configured: no API key — set it in the WebUI settings';
+    sendJson(res, 503, {
+      error: 'API key is not configured — open Settings and paste a key first',
+    });
+    logMetadata({
+      time: startedAt,
+      route: 'POST /api/evaluate',
+      upstream: API_URL,
+      status: 503,
+      latency_ms: Date.now() - t0,
+      auth: 'Authorization: Bearer ***',
+      note: errorNote,
+    });
+    return;
+  }
+
   let state;
   let questions;
   try {
@@ -221,6 +372,14 @@ const server = http.createServer(async (req, res) => {
     await handleEvaluate(req, res);
     return;
   }
+  if (req.method === 'POST' && pathname === '/api/config/api-key') {
+    await handleSetApiKey(req, res);
+    return;
+  }
+  if (req.method === 'GET' && pathname === '/api/config/api-key/status') {
+    sendJson(res, 200, { configured: apiKeyConfigured() });
+    return;
+  }
   if (req.method === 'GET' && pathname === '/api/health') {
     sendJson(res, 200, { ok: true });
     return;
@@ -230,7 +389,13 @@ const server = http.createServer(async (req, res) => {
 
 server.listen(PORT, HOST, () => {
   console.log(`[jev-test2] listening on http://${HOST}:${PORT}`);
-  console.log('[jev-test2] API key loaded from file (kept in memory only).');
+  if (apiKeyConfigured()) {
+    console.log('[jev-test2] API key loaded from file (kept in memory only).');
+  } else {
+    console.log(
+      '[jev-test2] API key: not configured — set it in the WebUI settings'
+    );
+  }
 });
 
 // Stop paths: Ctrl+C (SIGINT), kill (SIGTERM), JEV_MAX_LIFETIME_MS deadline.

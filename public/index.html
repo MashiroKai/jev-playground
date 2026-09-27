@@ -26,12 +26,20 @@
   main { max-width: 860px; margin: 0 auto; }
   h1 { font-size: 20px; font-weight: 600; letter-spacing: -0.02em; margin: 0 0 4px; }
   .sub { color: var(--muted); margin: 0 0 20px; }
+  .topline { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
+  .topline .sub { margin-bottom: 20px; }
+  #settingsBtn { flex: none; margin-top: 2px; padding: 6px 12px; font-weight: 400; }
+  .keyrow { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+  #keyStatus.clickable { cursor: pointer; text-decoration: underline dotted; text-underline-offset: 3px; }
+  #keyStatus.clickable:hover { color: var(--accent); }
+  #keyEditor input { max-width: 480px; display: block; }
+  .confirm { color: var(--ok); font-weight: 600; }
   .panel {
     background: var(--panel); border: 1px solid var(--line);
     border-radius: 12px; padding: 16px; margin-bottom: 16px;
   }
   label { display: block; font-weight: 600; margin-bottom: 6px; }
-  textarea, input[type="text"], select {
+  textarea, input[type="text"], input[type="password"], select {
     width: 100%; padding: 8px 10px; border: 1px solid var(--line);
     border-radius: 8px; background: var(--bg); color: var(--text);
     font: inherit;
@@ -65,8 +73,29 @@
 </head>
 <body>
 <main>
-  <h1>jev-test2 · JeV test console</h1>
-  <p class="sub">Type content, ask typed questions, see JeV's answers with confidence. The API key stays on the backend; the browser only talks to this local server.</p>
+  <div class="topline">
+    <div>
+      <h1>jev-test2 · JeV test console</h1>
+      <p class="sub">Type content, ask typed questions, see JeV's answers with confidence. The API key stays on the backend; the browser only talks to this local server.</p>
+    </div>
+    <button type="button" class="secondary" id="settingsBtn" aria-expanded="false" aria-controls="settingsPanel" title="Settings">⚙ Settings</button>
+  </div>
+
+  <section class="panel" id="settingsPanel" hidden>
+    <label>API key</label>
+    <div class="keyrow">
+      <span id="keyStatus">Checking…</span>
+      <span id="keyMsg" role="status"></span>
+    </div>
+    <p class="hint" id="keyHint"></p>
+    <div id="keyEditor" hidden>
+      <input type="password" id="keyInput" placeholder="Paste a new key here" autocomplete="new-password" spellcheck="false" aria-label="new API key">
+      <div class="actions" style="margin-top:10px">
+        <button type="button" id="saveKeyBtn">Save</button>
+        <span class="status">The key is sent once to the local backend and never shown again.</span>
+      </div>
+    </div>
+  </section>
 
   <section class="panel">
     <label for="state">State <span style="font-weight:400;color:var(--muted)">(text JeV should evaluate)</span></label>
@@ -238,6 +267,7 @@
       const data = await res.json().catch(() => ({}));
       const ms = Math.round(performance.now() - t0);
       if (!res.ok) {
+        if (res.status === 503) openSettings(); // guide to the key settings
         throw new Error(`HTTP ${res.status}: ${data.error || "request failed"}${data.detail ? " — " + data.detail : ""}`);
       }
       panel.hidden = false;
@@ -256,10 +286,94 @@
     }
   }
 
+  // --- API key settings (write-only: the browser never receives the key) -----
+  let keyConfigured = false;
+
+  function openSettings() {
+    document.getElementById("settingsPanel").hidden = false;
+    document.getElementById("settingsBtn").setAttribute("aria-expanded", "true");
+  }
+
+  function renderKeyStatus() {
+    const status = document.getElementById("keyStatus");
+    const editor = document.getElementById("keyEditor");
+    const hint = document.getElementById("keyHint");
+    status.classList.toggle("clickable", keyConfigured);
+    if (keyConfigured) {
+      status.textContent = "Configured · click to replace";
+      hint.textContent = "A key is stored on the backend (0600 owner-only, never displayed). Click above to paste a replacement — it takes effect immediately, no restart.";
+      editor.hidden = true;
+    } else {
+      status.textContent = "Not configured";
+      hint.textContent = "No key yet: create one in your TypeSafe JeV account, then paste it below. It is stored on this machine only and never shown again.";
+      editor.hidden = false;
+    }
+  }
+
+  async function refreshKeyStatus() {
+    try {
+      const res = await fetch("/api/config/api-key/status");
+      const data = await res.json();
+      keyConfigured = data.configured === true;
+    } catch {
+      keyConfigured = false;
+    }
+    renderKeyStatus();
+  }
+
+  document.getElementById("keyStatus").addEventListener("click", () => {
+    if (!keyConfigured) return; // editor is already open when unconfigured
+    const editor = document.getElementById("keyEditor");
+    const opening = editor.hidden;
+    editor.hidden = !opening;
+    if (opening) document.getElementById("keyInput").focus();
+  });
+
+  async function saveKey() {
+    const input = document.getElementById("keyInput");
+    const msg = document.getElementById("keyMsg");
+    const btn = document.getElementById("saveKeyBtn");
+    const value = input.value;
+    if (!value.trim()) {
+      msg.innerHTML = `<span class="err">Paste a key first.</span>`;
+      return;
+    }
+    btn.disabled = true;
+    msg.textContent = "Saving…";
+    try {
+      const res = await fetch("/api/config/api-key", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ apiKey: value }), // sent once, never kept in the page
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+      input.value = ""; // clear immediately — the page never retains the key
+      keyConfigured = true;
+      renderKeyStatus();
+      msg.innerHTML = `<span class="confirm">Saved (len ${data.length}, ${esc(data.fingerprint)}).</span>`;
+      setTimeout(() => { msg.textContent = ""; }, 6000); // let the line fade out
+    } catch (err) {
+      msg.innerHTML = `<span class="err">Save failed: ${esc(err.message)}</span>`; // input kept for retry
+    } finally {
+      btn.disabled = false;
+    }
+  }
+  document.getElementById("saveKeyBtn").addEventListener("click", saveKey);
+  document.getElementById("keyInput").addEventListener("keydown", (e) => {
+    if (e.key === "Enter") saveKey();
+  });
+  document.getElementById("settingsBtn").addEventListener("click", () => {
+    const panel = document.getElementById("settingsPanel");
+    panel.hidden = !panel.hidden;
+    document.getElementById("settingsBtn").setAttribute("aria-expanded", String(!panel.hidden));
+  });
+
   document.getElementById("addBtn").addEventListener("click", () => addQuestionRow());
   document.getElementById("askBtn").addEventListener("click", ask);
   addQuestionRow({ type: "noul", instructions: "Does this convey urgency?" });
   addQuestionRow({ type: "score", instructions: "How frustrated is this customer?", criteria: ["calm", "frustrated", "very angry"] });
+  refreshKeyStatus();
 </script>
 </body>
 </html>

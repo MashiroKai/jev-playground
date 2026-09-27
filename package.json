@@ -1,0 +1,14 @@
+{
+  "name": "jev-test2",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Minimal TypeSafe JeV test app: single-page WebUI plus a thin backend that forwards to the JeV HTTP API.",
+  "type": "module",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "start": "node server.mjs",
+    "selfcheck": "node scripts/selfcheck.mjs"
+  }
+}

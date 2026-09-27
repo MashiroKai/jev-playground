@@ -1,0 +1,265 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>jev-test2 · JeV test console</title>
+<style>
+  :root {
+    --bg: #f6f7f9; --panel: #ffffff; --text: #1b1e26; --muted: #6b7280;
+    --line: #e3e6ea; --accent: #5e6ad2; --accent-soft: #eceefb;
+    --ok: #1a7f4b; --warn: #b45309; --bad: #b3261e;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #14161b; --panel: #1d2027; --text: #e8eaed; --muted: #9aa1ac;
+      --line: #2c3038; --accent: #8b93e8; --accent-soft: #262a3d;
+      --ok: #4ade80; --warn: #fbbf24; --bad: #f87171;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 24px; background: var(--bg); color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    font-size: 14px; line-height: 1.5;
+  }
+  main { max-width: 860px; margin: 0 auto; }
+  h1 { font-size: 20px; font-weight: 600; letter-spacing: -0.02em; margin: 0 0 4px; }
+  .sub { color: var(--muted); margin: 0 0 20px; }
+  .panel {
+    background: var(--panel); border: 1px solid var(--line);
+    border-radius: 12px; padding: 16px; margin-bottom: 16px;
+  }
+  label { display: block; font-weight: 600; margin-bottom: 6px; }
+  textarea, input[type="text"], select {
+    width: 100%; padding: 8px 10px; border: 1px solid var(--line);
+    border-radius: 8px; background: var(--bg); color: var(--text);
+    font: inherit;
+  }
+  textarea { min-height: 96px; resize: vertical; }
+  .qrow { display: grid; grid-template-columns: 110px 1fr 170px; gap: 10px; margin-bottom: 10px; }
+  .qrow .crit { margin-top: 8px; }
+  .hint { color: var(--muted); font-size: 12px; margin-top: 4px; }
+  button {
+    font: inherit; font-weight: 600; color: #fff; background: var(--accent);
+    border: none; border-radius: 8px; padding: 9px 18px; cursor: pointer;
+  }
+  button.secondary { background: transparent; color: var(--muted); border: 1px solid var(--line); font-weight: 400; }
+  button:disabled { opacity: 0.55; cursor: default; }
+  .actions { display: flex; gap: 10px; align-items: center; }
+  .status { color: var(--muted); }
+  .answer { border-top: 1px solid var(--line); padding: 12px 0 2px; }
+  .answer:first-child { border-top: none; padding-top: 0; }
+  .ahead { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; }
+  .qid { font-weight: 600; }
+  .qtype { color: var(--muted); font-size: 12px; }
+  .conf { font-weight: 600; font-variant-numeric: tabular-nums; }
+  .bar { height: 8px; border-radius: 4px; background: var(--accent-soft); margin: 8px 0; overflow: hidden; }
+  .bar > div { height: 100%; background: var(--accent); border-radius: 4px; }
+  .pill { display: inline-block; font-size: 12px; padding: 1px 8px; border-radius: 999px; background: var(--accent-soft); margin: 2px 6px 2px 0; font-variant-numeric: tabular-nums; }
+  .value { font-size: 15px; font-weight: 600; }
+  .err { color: var(--bad); font-weight: 600; }
+  .meta { color: var(--muted); font-size: 12px; margin-top: 6px; }
+  code { background: var(--accent-soft); border-radius: 4px; padding: 0 4px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>jev-test2 · JeV test console</h1>
+  <p class="sub">Type content, ask typed questions, see JeV's answers with confidence. The API key stays on the backend; the browser only talks to this local server.</p>
+
+  <section class="panel">
+    <label for="state">State <span style="font-weight:400;color:var(--muted)">(text JeV should evaluate)</span></label>
+    <textarea id="state" placeholder="e.g. Help! My payouts have been failing for 3 days.">Help! My payouts have been failing for 3 days.</textarea>
+  </section>
+
+  <section class="panel">
+    <label>Questions</label>
+    <div id="questions"></div>
+    <div class="actions" style="margin-top:12px">
+      <button type="button" class="secondary" id="addBtn">+ Add question</button>
+      <button type="button" id="askBtn">Ask JeV</button>
+      <span class="status" id="status"></span>
+    </div>
+  </section>
+
+  <section class="panel" id="resultPanel" hidden>
+    <div id="answers"></div>
+    <div class="meta" id="respMeta"></div>
+  </section>
+</main>
+
+<script>
+  "use strict";
+
+  // One question row: type selector + instructions + criteria (when needed).
+  function addQuestionRow(prefill) {
+    const row = document.createElement("div");
+    row.className = "qrow";
+    row.innerHTML = `
+      <select class="qtype" aria-label="question type">
+        <option value="noul">noul (yes/no)</option>
+        <option value="choice">choice (pick one)</option>
+        <option value="score">score (2-10 levels)</option>
+      </select>
+      <div>
+        <input type="text" class="qinstr" placeholder="instructions, e.g. Does this convey urgency?" aria-label="instructions">
+        <input type="text" class="crit" placeholder="criteria (comma-separated labels)" aria-label="criteria" style="display:none">
+        <input type="text" class="critdesc" placeholder="criteria descriptions (comma-separated, optional)" aria-label="criteria descriptions" style="display:none">
+        <div class="hint crit-hint" style="display:none"></div>
+      </div>
+      <button type="button" class="secondary qdel">Remove</button>`;
+    const typeSel = row.querySelector(".qtype");
+    const crit = row.querySelector(".crit");
+    const critdesc = row.querySelector(".critdesc");
+    const hint = row.querySelector(".crit-hint");
+    function refresh() {
+      const show = typeSel.value !== "noul";
+      crit.style.display = show ? "" : "none";
+      critdesc.style.display = show ? "" : "none";
+      hint.style.display = show ? "" : "none";
+      hint.textContent = typeSel.value === "choice"
+        ? "Options (2-255, comma-separated) + optional per-option descriptions"
+        : "Levels from low to high (2-10, comma-separated; descriptions ignored)";
+    }
+    typeSel.addEventListener("change", refresh);
+    row.querySelector(".qdel").addEventListener("click", () => row.remove());
+    if (prefill) {
+      typeSel.value = prefill.type;
+      row.querySelector(".qinstr").value = prefill.instructions || "";
+      if (prefill.criteria) crit.value = prefill.criteria.join(", ");
+    }    refresh();
+    document.getElementById("questions").appendChild(row);
+  }
+
+  function collectQuestions() {
+    const out = {};
+    let n = 0;
+    for (const row of document.querySelectorAll(".qrow")) {
+      const type = row.querySelector(".qtype").value;
+      const instructions = row.querySelector(".qinstr").value.trim();
+      if (!instructions) continue; // skip empty rows
+      const labels = row.querySelector(".crit").value
+        .split(",").map((s) => s.trim()).filter(Boolean);
+      const descs = row.querySelector(".critdesc").value
+        .split(",").map((s) => s.trim()).filter(Boolean);
+      if ((type === "choice" || type === "score") && labels.length === 0) {
+        throw new Error(`A ${type} question needs criteria (comma-separated).`);
+      }
+      if (type === "choice" && (labels.length < 2 || labels.length > 255)) {
+        throw new Error("choice needs between 2 and 255 options.");
+      }
+      if (type === "score" && (labels.length < 2 || labels.length > 10)) {
+        throw new Error("score needs between 2 and 10 levels.");
+      }
+      // JeV expects: choice criteria = object label -> description|null;
+      // score criteria = ordered array of level labels.
+      let criteria;
+      if (type === "choice") {
+        criteria = {};
+        labels.forEach((label, i) => { criteria[label] = descs[i] || null; });
+      } else {
+        criteria = labels;
+      }
+      out["q" + (++n)] = type === "noul"
+        ? { type, instructions }
+        : { type, instructions, criteria };
+    }
+    return out;
+  }
+
+  function esc(s) {
+    return String(s).replace(/[&<>"']/g, (c) => ({
+      "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+    }[c]));
+  }
+
+  function renderAnswers(answers) {
+    const host = document.getElementById("answers");
+    host.innerHTML = "";
+    for (const [id, a] of Object.entries(answers || {})) {
+      const div = document.createElement("div");
+      div.className = "answer";
+      let valueHtml = "";
+      let conf = null;
+      let pills = "";
+      if (a.type === "noul") {
+        conf = typeof a.noul === "number" ? a.noul : null;
+        valueHtml = `<span class="value">${a.noul >= 0.5 ? "yes" : "no"}</span>
+          <span class="qtype">P(yes) = ${a.noul}</span>`;
+      } else if (a.type === "choice") {
+        conf = a.confidence;
+        valueHtml = `<span class="value">${esc(a.choice)}</span>`;
+        pills = Object.entries(a.probabilities || {})
+          .sort((x, y) => y[1] - x[1])
+          .map(([opt, p]) => `<span class="pill">${esc(opt)}: ${p}</span>`)
+          .join("");
+      } else if (a.type === "score") {
+        conf = a.confidence;
+        const legend = a.legend || {};
+        valueHtml = `<span class="value">${a.score}</span>
+          <span class="qtype">${esc(legend[String(Math.round(a.score))] || "")}</span>`;
+        pills = Object.entries(a.probabilities || {})
+          .sort((x, y) => Number(x[0]) - Number(y[0]))
+          .map(([lv, p]) => `<span class="pill">${esc(legend[lv] || lv)}: ${p}</span>`)
+          .join("");
+      }
+      const confHtml = conf === null || conf === undefined
+        ? `<span class="qtype">no confidence field (noul shows P(yes))</span>`
+        : `<span class="conf">confidence ${conf}</span>`;
+      div.innerHTML = `
+        <div class="ahead"><span class="qid">${esc(id)} <span class="qtype">· ${esc(a.type)}</span></span>${confHtml}</div>
+        <div>${valueHtml}</div>
+        ${conf === null || conf === undefined ? "" : `<div class="bar"><div style="width:${Math.round(conf * 100)}%"></div></div>`}
+        ${pills ? `<div>${pills}</div>` : ""}`;
+      host.appendChild(div);
+    }
+  }
+
+  async function ask() {
+    const btn = document.getElementById("askBtn");
+    const status = document.getElementById("status");
+    const panel = document.getElementById("resultPanel");
+    const state = document.getElementById("state").value.trim();
+    try {
+      if (!state) throw new Error("State is empty.");
+      const questions = collectQuestions();
+      if (Object.keys(questions).length === 0) {
+        throw new Error("Add at least one question with instructions.");
+      }
+      btn.disabled = true;
+      status.textContent = "Asking JeV…";
+      const t0 = performance.now();
+      const res = await fetch("/api/evaluate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ state, questions }),
+      });
+      const data = await res.json().catch(() => ({}));
+      const ms = Math.round(performance.now() - t0);
+      if (!res.ok) {
+        throw new Error(`HTTP ${res.status}: ${data.error || "request failed"}${data.detail ? " — " + data.detail : ""}`);
+      }
+      panel.hidden = false;
+      renderAnswers(data.answers);
+      document.getElementById("respMeta").textContent =
+        `model ${data.model || "?"} · usage in ${data.usage?.input_tokens ?? "?"} / out ${data.usage?.output_tokens ?? "?"} tokens · ${ms} ms round-trip`;
+      status.textContent = "";
+    } catch (err) {
+      panel.hidden = false;
+      document.getElementById("answers").innerHTML =
+        `<div class="answer"><span class="err">Error: ${esc(err.message)}</span></div>`;
+      document.getElementById("respMeta").textContent = "";
+      status.textContent = "";
+    } finally {
+      btn.disabled = false;
+    }
+  }
+
+  document.getElementById("addBtn").addEventListener("click", () => addQuestionRow());
+  document.getElementById("askBtn").addEventListener("click", ask);
+  addQuestionRow({ type: "noul", instructions: "Does this convey urgency?" });
+  addQuestionRow({ type: "score", instructions: "How frustrated is this customer?", criteria: ["calm", "frustrated", "very angry"] });
+</script>
+</body>
+</html>

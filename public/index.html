@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>JeV Playground · JeV console</title>
+<title data-i18n="title"></title>
 <style>
   :root {
     --bg: #f6f7f9; --panel: #ffffff; --text: #1b1e26; --muted: #6b7280;
@@ -28,7 +28,8 @@
   .sub { color: var(--muted); margin: 0 0 20px; }
   .topline { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
   .topline .sub { margin-bottom: 20px; }
-  #settingsBtn { flex: none; margin-top: 2px; padding: 6px 12px; font-weight: 400; }
+  .hdr-actions { display: flex; gap: 8px; flex: none; }
+  .hdr-actions button { margin-top: 2px; padding: 6px 12px; font-weight: 400; }
   .keyrow { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
   #keyStatus.clickable { cursor: pointer; text-decoration: underline dotted; text-underline-offset: 3px; }
   #keyStatus.clickable:hover { color: var(--accent); }
@@ -75,39 +76,42 @@
 <main>
   <div class="topline">
     <div>
-      <h1>JeV Playground · JeV console</h1>
-      <p class="sub">Type content, ask typed questions, see JeV's answers with confidence. The API key stays on the backend; the browser only talks to this local server.</p>
+      <h1 data-i18n="title"></h1>
+      <p class="sub" data-i18n="hero.sub"></p>
     </div>
-    <button type="button" class="secondary" id="settingsBtn" aria-expanded="false" aria-controls="settingsPanel" title="Settings">⚙ Settings</button>
+    <div class="hdr-actions">
+      <button type="button" class="secondary" id="langToggle" data-i18n="lang.toggle" data-i18n-title="lang.toggle.title"></button>
+      <button type="button" class="secondary" id="settingsBtn" aria-expanded="false" aria-controls="settingsPanel" data-i18n="settings.open" data-i18n-title="settings.title"></button>
+    </div>
   </div>
 
   <section class="panel" id="settingsPanel" hidden>
-    <label>API key</label>
+    <label data-i18n="settings.apiKey"></label>
     <div class="keyrow">
-      <span id="keyStatus">Checking…</span>
+      <span id="keyStatus" data-i18n="key.status.checking"></span>
       <span id="keyMsg" role="status"></span>
     </div>
     <p class="hint" id="keyHint"></p>
     <div id="keyEditor" hidden>
-      <input type="password" id="keyInput" placeholder="Paste a new key here" autocomplete="new-password" spellcheck="false" aria-label="new API key">
+      <input type="password" id="keyInput" data-i18n-placeholder="key.input.placeholder" data-i18n-aria="aria.newKey" autocomplete="new-password" spellcheck="false">
       <div class="actions" style="margin-top:10px">
-        <button type="button" id="saveKeyBtn">Save</button>
-        <span class="status">The key is sent once to the local backend and never shown again.</span>
+        <button type="button" id="saveKeyBtn" data-i18n="key.save"></button>
+        <span class="status" data-i18n="key.save.note"></span>
       </div>
     </div>
   </section>
 
   <section class="panel">
-    <label for="state">State <span style="font-weight:400;color:var(--muted)">(text JeV should evaluate)</span></label>
-    <textarea id="state" placeholder="e.g. Help! My payouts have been failing for 3 days.">Help! My payouts have been failing for 3 days.</textarea>
+    <label for="state"><span data-i18n="state.label"></span> <span style="font-weight:400;color:var(--muted)" data-i18n="state.hint"></span></label>
+    <textarea id="state" data-i18n-placeholder="state.placeholder">Help! My payouts have been failing for 3 days.</textarea>
   </section>
 
   <section class="panel">
-    <label>Questions</label>
+    <label data-i18n="questions.label"></label>
     <div id="questions"></div>
     <div class="actions" style="margin-top:12px">
-      <button type="button" class="secondary" id="addBtn">+ Add question</button>
-      <button type="button" id="askBtn">Ask JeV</button>
+      <button type="button" class="secondary" id="addBtn" data-i18n="questions.add"></button>
+      <button type="button" id="askBtn" data-i18n="ask.idle"></button>
       <span class="status" id="status"></span>
     </div>
   </section>
@@ -118,26 +122,69 @@
   </section>
 </main>
 
-<script>
-  "use strict";
+<script type="module">
+  import { STRINGS, t, LANGS, LANG_STORAGE_KEY } from "./strings.js";
 
-  // One question row: type selector + instructions + criteria (when needed).
+  // Live language: a stored choice wins, else the browser preference decides.
+  function initLang() {
+    let stored = null;
+    try { stored = localStorage.getItem(LANG_STORAGE_KEY); } catch { stored = null; }
+    if (LANGS.includes(stored)) return stored;
+    const nav = String(navigator.language || "").toLowerCase();
+    return nav.startsWith("zh") ? "zh-CN" : "en";
+  }
+  let lang = initLang();
+  let asking = false;
+  let keyNote = null;      // {kind:"plain"|"ok"|"err", key, vars}
+  let lastResult = null;       // {kind:"answers", data, ms} | {kind:"error", message}
+  let editorOpen = false;      // user revealed the replacement field
+
+  // Errors carry their key + vars (not a resolved string) so that a language
+  // switch re-localizes an already-rendered failure without repeating the call.
+  // `suffix` holds backend-supplied detail, which stays verbatim by design.
+  function fail(key, vars, suffix) {
+    const e = new Error(t(lang, key, vars) + (suffix || ""));
+    e.i18n = { key, vars, suffix: suffix || "" };
+    return e;
+  }
+  function errText(e) {
+    return e && e.i18n ? t(lang, e.i18n.key, e.i18n.vars) + e.i18n.suffix : String(e && e.message || e);
+  }
+
+  // Static copy is declared in the markup and re-filled from the table.
+  function applyStatic(root) {
+    const scope = root || document;
+    for (const el of scope.querySelectorAll("[data-i18n]")) {
+      el.textContent = t(lang, el.getAttribute("data-i18n"));
+    }
+    for (const el of scope.querySelectorAll("[data-i18n-placeholder]")) {
+      el.placeholder = t(lang, el.getAttribute("data-i18n-placeholder"));
+    }
+    for (const el of scope.querySelectorAll("[data-i18n-title]")) {
+      el.title = t(lang, el.getAttribute("data-i18n-title"));
+    }
+    for (const el of scope.querySelectorAll("[data-i18n-aria]")) {
+      el.setAttribute("aria-label", t(lang, el.getAttribute("data-i18n-aria")));
+    }
+  }
+
+  // One question row: type selector + prompt + labels (when the type needs them).
   function addQuestionRow(prefill) {
     const row = document.createElement("div");
     row.className = "qrow";
     row.innerHTML = `
-      <select class="qtype" aria-label="question type">
-        <option value="noul">noul (yes/no)</option>
-        <option value="choice">choice (pick one)</option>
-        <option value="score">score (2-10 levels)</option>
+      <select class="qtype" data-i18n-aria="aria.qtype">
+        <option value="noul" data-i18n="qtype.noul"></option>
+        <option value="choice" data-i18n="qtype.choice"></option>
+        <option value="score" data-i18n="qtype.score"></option>
       </select>
       <div>
-        <input type="text" class="qinstr" placeholder="instructions, e.g. Does this convey urgency?" aria-label="instructions">
-        <input type="text" class="crit" placeholder="criteria (comma-separated labels)" aria-label="criteria" style="display:none">
-        <input type="text" class="critdesc" placeholder="criteria descriptions (comma-separated, optional)" aria-label="criteria descriptions" style="display:none">
+        <input type="text" class="qinstr" data-i18n-placeholder="q.instr.placeholder" data-i18n-aria="aria.instr">
+        <input type="text" class="crit" data-i18n-placeholder="q.crit.placeholder" data-i18n-aria="aria.crit" style="display:none">
+        <input type="text" class="critdesc" data-i18n-placeholder="q.critdesc.placeholder" data-i18n-aria="aria.critdesc" style="display:none">
         <div class="hint crit-hint" style="display:none"></div>
       </div>
-      <button type="button" class="secondary qdel">Remove</button>`;
+      <button type="button" class="secondary qdel" data-i18n="q.remove"></button>`;
     const typeSel = row.querySelector(".qtype");
     const crit = row.querySelector(".crit");
     const critdesc = row.querySelector(".critdesc");
@@ -147,9 +194,7 @@
       crit.style.display = show ? "" : "none";
       critdesc.style.display = show ? "" : "none";
       hint.style.display = show ? "" : "none";
-      hint.textContent = typeSel.value === "choice"
-        ? "Options (2-255, comma-separated) + optional per-option descriptions"
-        : "Levels from low to high (2-10, comma-separated; descriptions ignored)";
+      refreshRowHint(row);
     }
     typeSel.addEventListener("change", refresh);
     row.querySelector(".qdel").addEventListener("click", () => row.remove());
@@ -159,30 +204,36 @@
       if (prefill.criteria) crit.value = prefill.criteria.join(", ");
     }    refresh();
     document.getElementById("questions").appendChild(row);
+    applyStatic(row);
   }
 
-  function collectQuestions() {
+  function refreshRowHint(row) {
+    row.querySelector(".crit-hint").textContent =
+      row.querySelector(".qtype").value === "choice" ? t(lang, "q.hint.choice") : t(lang, "q.hint.score");
+  }
+
+  function gatherQuestions() {
     const out = {};
     let n = 0;
     for (const row of document.querySelectorAll(".qrow")) {
       const type = row.querySelector(".qtype").value;
-      const instructions = row.querySelector(".qinstr").value.trim();
-      if (!instructions) continue; // skip empty rows
+      const instr = row.querySelector(".qinstr").value.trim();
+      if (!instr) continue; // skip empty rows
       const labels = row.querySelector(".crit").value
         .split(",").map((s) => s.trim()).filter(Boolean);
       const descs = row.querySelector(".critdesc").value
         .split(",").map((s) => s.trim()).filter(Boolean);
       if ((type === "choice" || type === "score") && labels.length === 0) {
-        throw new Error(`A ${type} question needs criteria (comma-separated).`);
+        throw fail("err.criteria.required", { type });
       }
       if (type === "choice" && (labels.length < 2 || labels.length > 255)) {
-        throw new Error("choice needs between 2 and 255 options.");
+        throw fail("err.choice.range");
       }
       if (type === "score" && (labels.length < 2 || labels.length > 10)) {
-        throw new Error("score needs between 2 and 10 levels.");
+        throw fail("err.score.range");
       }
-      // JeV expects: choice criteria = object label -> description|null;
-      // score criteria = ordered array of level labels.
+      // JeV wire shape: choice → object label → description|null;
+      // score → ordered array of level labels.
       let criteria;
       if (type === "choice") {
         criteria = {};
@@ -191,8 +242,8 @@
         criteria = labels;
       }
       out["q" + (++n)] = type === "noul"
-        ? { type, instructions }
-        : { type, instructions, criteria };
+        ? { type, instructions: instr }
+        : { type, instructions: instr, criteria };
     }
     return out;
   }
@@ -214,8 +265,8 @@
       let pills = "";
       if (a.type === "noul") {
         conf = typeof a.noul === "number" ? a.noul : null;
-        valueHtml = `<span class="value">${a.noul >= 0.5 ? "yes" : "no"}</span>
-          <span class="qtype">P(yes) = ${a.noul}</span>`;
+        valueHtml = `<span class="value">${a.noul >= 0.5 ? t(lang, "answer.yes") : t(lang, "answer.no")}</span>
+          <span class="qtype">${t(lang, "answer.pYes", { p: a.noul })}</span>`;
       } else if (a.type === "choice") {
         conf = a.confidence;
         valueHtml = `<span class="value">${esc(a.choice)}</span>`;
@@ -234,8 +285,8 @@
           .join("");
       }
       const confHtml = conf === null || conf === undefined
-        ? `<span class="qtype">no confidence field (noul shows P(yes))</span>`
-        : `<span class="conf">confidence ${conf}</span>`;
+        ? `<span class="qtype">${t(lang, "answer.noConfidence")}</span>`
+        : `<span class="conf">${t(lang, "answer.confidence", { conf })}</span>`;
       div.innerHTML = `
         <div class="ahead"><span class="qid">${esc(id)} <span class="qtype">· ${esc(a.type)}</span></span>${confHtml}</div>
         <div>${valueHtml}</div>
@@ -248,16 +299,16 @@
   async function ask() {
     const btn = document.getElementById("askBtn");
     const status = document.getElementById("status");
-    const panel = document.getElementById("resultPanel");
     const state = document.getElementById("state").value.trim();
     try {
-      if (!state) throw new Error("State is empty.");
-      const questions = collectQuestions();
+      if (!state) throw fail("err.stateEmpty");
+      const questions = gatherQuestions();
       if (Object.keys(questions).length === 0) {
-        throw new Error("Add at least one question with instructions.");
+        throw fail("err.noQuestions");
       }
+      asking = true;
       btn.disabled = true;
-      status.textContent = "Asking JeV…";
+      status.textContent = t(lang, "ask.busy");
       const t0 = performance.now();
       const res = await fetch("/api/evaluate", {
         method: "POST",
@@ -267,26 +318,46 @@
       const data = await res.json().catch(() => ({}));
       const ms = Math.round(performance.now() - t0);
       if (!res.ok) {
-        if (res.status === 503) openSettings(); // guide to the key settings
-        throw new Error(`HTTP ${res.status}: ${data.error || "request failed"}${data.detail ? " — " + data.detail : ""}`);
+        if (res.status === 503) openSettings(); // guide to the secret settings
+        throw fail("err.http",
+          { status: res.status, error: data.error || t(lang, "err.http.fallback") },
+          data.detail ? " — " + data.detail : "");
       }
-      panel.hidden = false;
-      renderAnswers(data.answers);
-      document.getElementById("respMeta").textContent =
-        `model ${data.model || "?"} · usage in ${data.usage?.input_tokens ?? "?"} / out ${data.usage?.output_tokens ?? "?"} tokens · ${ms} ms round-trip`;
+      lastResult = { kind: "answers", data, ms };
+      renderLastResult();
       status.textContent = "";
     } catch (err) {
-      panel.hidden = false;
-      document.getElementById("answers").innerHTML =
-        `<div class="answer"><span class="err">Error: ${esc(err.message)}</span></div>`;
-      document.getElementById("respMeta").textContent = "";
+      lastResult = { kind: "error", error: err };
+      renderLastResult();
       status.textContent = "";
     } finally {
+      asking = false;
       btn.disabled = false;
     }
   }
 
-  // --- API key settings (write-only: the browser never receives the key) -----
+  // Repaint the last outcome from its stored data (used when the language changes).
+  function renderLastResult() {
+    if (!lastResult) return;
+    const panel = document.getElementById("resultPanel");
+    panel.hidden = false;
+    if (lastResult.kind === "error") {
+      document.getElementById("answers").innerHTML =
+        `<div class="answer"><span class="err">${esc(t(lang, "err.generic", { msg: errText(lastResult.error) }))}</span></div>`;
+      document.getElementById("respMeta").textContent = "";
+      return;
+    }
+    const { data, ms } = lastResult;
+    renderAnswers(data.answers);
+    document.getElementById("respMeta").textContent = t(lang, "resp.meta", {
+      model: data.model || "?",
+      in: data.usage?.input_tokens ?? "?",
+      out: data.usage?.output_tokens ?? "?",
+      ms,
+    });
+  }
+
+  // --- Secret settings (write-only: the browser never receives the value) ----
   let keyConfigured = false;
 
   function openSettings() {
@@ -296,18 +367,25 @@
 
   function renderKeyStatus() {
     const status = document.getElementById("keyStatus");
-    const editor = document.getElementById("keyEditor");
     const hint = document.getElementById("keyHint");
     status.classList.toggle("clickable", keyConfigured);
     if (keyConfigured) {
-      status.textContent = "Configured · click to replace";
-      hint.textContent = "A key is stored on the backend (0600 owner-only, never displayed). Click above to paste a replacement — it takes effect immediately, no restart.";
-      editor.hidden = true;
+      status.textContent = t(lang, "key.status.configured");
+      hint.textContent = t(lang, "key.hint.configured");
+      document.getElementById("keyEditor").hidden = !editorOpen;
     } else {
-      status.textContent = "Not configured";
-      hint.textContent = "No key yet: create one in your TypeSafe JeV account, then paste it below. It is stored on this machine only and never shown again.";
-      editor.hidden = false;
+      status.textContent = t(lang, "key.status.missing");
+      hint.textContent = t(lang, "key.hint.missing");
+      document.getElementById("keyEditor").hidden = false;
     }
+  }
+
+  function renderKeyNote() {
+    const msg = document.getElementById("keyMsg");
+    if (!keyNote) { msg.textContent = ""; return; }
+    const text = t(lang, keyNote.key, keyNote.vars);
+    if (keyNote.kind === "plain") msg.textContent = text;
+    else msg.innerHTML = `<span class="${keyNote.kind === "ok" ? "confirm" : "err"}">${esc(text)}</span>`;
   }
 
   async function refreshKeyStatus() {
@@ -322,24 +400,24 @@
   }
 
   document.getElementById("keyStatus").addEventListener("click", () => {
-    if (!keyConfigured) return; // editor is already open when unconfigured
-    const editor = document.getElementById("keyEditor");
-    const opening = editor.hidden;
-    editor.hidden = !opening;
-    if (opening) document.getElementById("keyInput").focus();
+    if (!keyConfigured) return; // the field is already open when nothing is stored
+    editorOpen = !editorOpen;
+    document.getElementById("keyEditor").hidden = !editorOpen;
+    if (editorOpen) document.getElementById("keyInput").focus();
   });
 
   async function saveKey() {
     const input = document.getElementById("keyInput");
-    const msg = document.getElementById("keyMsg");
     const btn = document.getElementById("saveKeyBtn");
     const value = input.value;
     if (!value.trim()) {
-      msg.innerHTML = `<span class="err">Paste a key first.</span>`;
+      keyNote = { kind: "err", key: "key.err.empty" };
+      renderKeyNote();
       return;
     }
     btn.disabled = true;
-    msg.textContent = "Saving…";
+    keyNote = { kind: "plain", key: "key.saving" };
+    renderKeyNote();
     try {
       const res = await fetch("/api/config/api-key", {
         method: "POST",
@@ -348,13 +426,16 @@
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
-      input.value = ""; // clear immediately — the page never retains the key
+      input.value = ""; // clear immediately — the page never retains the secret
       keyConfigured = true;
+      editorOpen = false;
       renderKeyStatus();
-      msg.innerHTML = `<span class="confirm">Saved (len ${data.length}, ${esc(data.fingerprint)}).</span>`;
-      setTimeout(() => { msg.textContent = ""; }, 6000); // let the line fade out
+      keyNote = { kind: "ok", key: "key.saved", vars: { len: data.length, fp: data.fingerprint } };
+      renderKeyNote();
+      setTimeout(() => { keyNote = null; renderKeyNote(); }, 6000); // let the line fade out
     } catch (err) {
-      msg.innerHTML = `<span class="err">Save failed: ${esc(err.message)}</span>`; // input kept for retry
+      keyNote = { kind: "err", key: "key.save.failed", vars: { msg: err.message } }; // input kept for retry
+      renderKeyNote();
     } finally {
       btn.disabled = false;
     }
@@ -369,11 +450,34 @@
     document.getElementById("settingsBtn").setAttribute("aria-expanded", String(!panel.hidden));
   });
 
+  // --- language switch ------------------------------------------------------
+  function renderAll() {
+    document.documentElement.lang = lang;
+    applyStatic();
+    for (const row of document.querySelectorAll(".qrow")) refreshRowHint(row);
+    renderKeyStatus();
+    renderKeyNote();
+    renderLastResult();
+    if (asking) document.getElementById("status").textContent = t(lang, "ask.busy");
+  }
+
+  function setLang(next) {
+    if (!LANGS.includes(next)) return;
+    lang = next;
+    try { localStorage.setItem(LANG_STORAGE_KEY, lang); } catch { /* storage blocked */ }
+    renderAll();
+  }
+
+  document.getElementById("langToggle").addEventListener("click", () => {
+    setLang(LANGS[(LANGS.indexOf(lang) + 1) % LANGS.length]);
+  });
+
   document.getElementById("addBtn").addEventListener("click", () => addQuestionRow());
   document.getElementById("askBtn").addEventListener("click", ask);
   addQuestionRow({ type: "noul", instructions: "Does this convey urgency?" });
   addQuestionRow({ type: "score", instructions: "How frustrated is this customer?", criteria: ["calm", "frustrated", "very angry"] });
   refreshKeyStatus();
+  renderAll();
 </script>
 </body>
 </html>

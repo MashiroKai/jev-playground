@@ -1,4 +1,4 @@
-// Headless end-to-end self-check for jev-test2 (batch-form, self-exiting).
+// Headless end-to-end self-check for JeV Playground (batch-form, self-exiting).
 //
 // D-2 compliance: one independent invocation per round; every sample is
 // written to disk as its own file; the script starts the server as a child

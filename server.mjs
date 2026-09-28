@@ -1,4 +1,4 @@
-// jev-test2 thin backend — zero-dependency Node.js (>=18, global fetch).
+// JeV Playground thin backend — zero-dependency Node.js (>=18, global fetch).
 //
 // Serves the single-page WebUI from public/ and exposes one forwarding
 // endpoint (POST /api/evaluate) that relays browser requests to the TypeSafe
@@ -58,7 +58,7 @@ try {
   API_KEY = loadApiKey() || null; // an empty file counts as not configured
 } catch (err) {
   console.error(
-    `[jev-test2] cannot read API key file at ${API_KEY_PATH}: ${err.message}`
+    `[jev-playground] cannot read API key file at ${API_KEY_PATH}: ${err.message}`
   );
 }
 
@@ -105,7 +105,7 @@ function persistApiKey(key) {
     const after = statSync(API_KEY_PATH);
     if (after.ino !== before.ino) {
       console.error(
-        `[jev-test2] warning: API key file inode changed during in-place write (was ${before.ino}, now ${after.ino})`
+        `[jev-playground] warning: API key file inode changed during in-place write (was ${before.ino}, now ${after.ino})`
       );
     }
   } else {
@@ -182,7 +182,7 @@ const maxLifetimeMs = Number(process.env.JEV_MAX_LIFETIME_MS || 0);
 if (maxLifetimeMs > 0) {
   setTimeout(() => {
     console.error(
-      `[jev-test2] JEV_MAX_LIFETIME_MS=${maxLifetimeMs} reached, exiting.`
+      `[jev-playground] JEV_MAX_LIFETIME_MS=${maxLifetimeMs} reached, exiting.`
     );
     process.exit(0);
   }, maxLifetimeMs).unref();
@@ -388,12 +388,12 @@ const server = http.createServer(async (req, res) => {
 });
 
 server.listen(PORT, HOST, () => {
-  console.log(`[jev-test2] listening on http://${HOST}:${PORT}`);
+  console.log(`[jev-playground] listening on http://${HOST}:${PORT}`);
   if (apiKeyConfigured()) {
-    console.log('[jev-test2] API key loaded from file (kept in memory only).');
+    console.log('[jev-playground] API key loaded from file (kept in memory only).');
   } else {
     console.log(
-      '[jev-test2] API key: not configured — set it in the WebUI settings'
+      '[jev-playground] API key: not configured — set it in the WebUI settings'
     );
   }
 });
@@ -401,7 +401,7 @@ server.listen(PORT, HOST, () => {
 // Stop paths: Ctrl+C (SIGINT), kill (SIGTERM), JEV_MAX_LIFETIME_MS deadline.
 // Closing the server clears the listen handle so the process can exit.
 function shutdown(signal) {
-  console.log(`[jev-test2] ${signal} received, closing server.`);
+  console.log(`[jev-playground] ${signal} received, closing server.`);
   server.close(() => process.exit(0));
   // Failsafe: do not hang on keep-alive sockets.
   setTimeout(() => process.exit(0), 3000).unref();

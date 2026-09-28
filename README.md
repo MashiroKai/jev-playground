@@ -1,10 +1,10 @@
-# jev-test
+# JeV Playground
 
-A minimal JeV tester — a local, single-page web app for trying out the TypeSafe JeV model: type a state, add a few typed questions, and read the answers with confidence.
+JeV Playground — a minimal JeV tester: type a state, add typed questions, and read the answers with confidence.
 
 [JeV](https://docs.typesafe.ai/introduction) is TypeSafe's JeV model: you hand it a state plus typed questions, and it answers with calibrated confidence. This tool is a thin harness around it: the browser page collects a State and any number of question rows and shows each answer with its confidence, while a zero-dependency Node.js backend forwards requests to the JeV HTTP API (`https://api.typesafe.ai/v1/systemone`). The API key never touches the browser: it lives only in the backend process, and request logs carry metadata only, with the Authorization header redacted.
 
-> Testing tool, not for production use.
+> Evaluation tool, not for production use.
 
 ## Features
 
@@ -49,7 +49,7 @@ Optional environment overrides (see `server.mjs`): `PORT` (default 8791), `HOST`
 
 ## 中文说明（zh-CN）
 
-**jev-test** 是一个极简的 JeV 测试工具：浏览器单页应用——输入一段状态文本（State）、添加若干条问题，即可看到 JeV 的回答与置信度。
+**JeV Playground** 是一个极简的 JeV 试用工具：浏览器单页应用——输入一段状态文本（State）、添加若干条问题，即可看到 JeV 的回答与置信度。
 
 [JeV](https://docs.typesafe.ai/introduction) 是 TypeSafe 的 JeV 模型：给它一段状态与若干条带类型的问题，它会以置信度形式回答。本工具是它的一层薄壳：浏览器页面负责收集 State 与任意多条问题行、逐条回显答案及置信度；零依赖的 Node.js 薄后端把请求转发到 JeV HTTP API（`https://api.typesafe.ai/v1/systemone`）。API key 绝不进入浏览器：它只存在于后端进程内，请求日志只记元数据，Authorization 头一律打码。
 

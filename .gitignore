@@ -10,3 +10,6 @@ secrets/
 
 # Nebflow engine-local metadata (machine-local paths; not part of the project)
 project.json
+
+# Local settings: provider/model and, when pasted, the API key. Never commit it.
+config.json

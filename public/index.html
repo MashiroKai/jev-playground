@@ -86,19 +86,45 @@
   </div>
 
   <section class="panel" id="settingsPanel" hidden>
-    <label data-i18n="settings.apiKey"></label>
-    <div class="keyrow">
-      <span id="keyStatus" data-i18n="key.status.checking"></span>
-      <span id="keyMsg" role="status"></span>
+    <label for="providerSelect" data-i18n="provider.label"></label>
+    <select id="providerSelect">
+      <option value="official" data-i18n="provider.official"></option>
+      <option value="laya" data-i18n="provider.laya"></option>
+      <option value="openai-compat" data-i18n="provider.openaiCompat"></option>
+    </select>
+    <p class="hint" id="providerHint"></p>
+    <p class="hint" id="providerReady" role="status"></p>
+
+    <div id="baseUrlRow" style="margin-top:12px">
+      <label for="baseUrlInput" data-i18n="provider.baseUrl"></label>
+      <input type="text" id="baseUrlInput" data-i18n-placeholder="provider.baseUrl.placeholder" spellcheck="false" autocomplete="off">
+      <p class="hint" data-i18n="provider.baseUrl.help"></p>
     </div>
-    <p class="hint" id="keyHint"></p>
-    <div id="keyEditor" hidden>
-      <input type="password" id="keyInput" data-i18n-placeholder="key.input.placeholder" data-i18n-aria="aria.newKey" autocomplete="new-password" spellcheck="false">
-      <div class="actions" style="margin-top:10px">
-        <button type="button" id="saveKeyBtn" data-i18n="key.save"></button>
-        <span class="status" data-i18n="key.save.note"></span>
+
+    <div style="margin-top:12px">
+      <label for="modelInput" data-i18n="provider.model"></label>
+      <input type="text" id="modelInput" data-i18n-placeholder="provider.model.placeholder" spellcheck="false" autocomplete="off">
+      <p class="hint" data-i18n="provider.model.help"></p>
+    </div>
+
+    <div style="margin-top:12px">
+      <label for="keyInput" id="keyLabel" data-i18n="settings.apiKey"></label>
+      <div class="keyrow">
+        <span id="keyStatus" data-i18n="key.status.checking"></span>
       </div>
+      <p class="hint" id="keyHint"></p>
+      <div id="keyEditor" hidden>
+        <input type="password" id="keyInput" data-i18n-placeholder="key.input.placeholder" data-i18n-aria="aria.newKey" autocomplete="new-password" spellcheck="false">
+      </div>
+      <p class="hint" data-i18n="provider.key.help"></p>
     </div>
+
+    <div class="actions" style="margin-top:12px">
+      <button type="button" id="saveProviderBtn" data-i18n="provider.save"></button>
+      <button type="button" class="secondary" id="saveKeyBtn" data-i18n="key.save"></button>
+      <span class="status" id="providerMsg" role="status"></span>
+    </div>
+    <p class="hint" data-i18n="key.save.note"></p>
   </section>
 
   <section class="panel">
@@ -118,6 +144,7 @@
 
   <section class="panel" id="resultPanel" hidden>
     <div id="answers"></div>
+    <div class="meta" id="respProvider"></div>
     <div class="meta" id="respMeta"></div>
   </section>
 </main>
@@ -138,6 +165,8 @@
   let keyNote = null;      // {kind:"plain"|"ok"|"err", key, vars}
   let lastResult = null;       // {kind:"answers", data, ms} | {kind:"error", message}
   let editorOpen = false;      // user revealed the replacement field
+  let cfg = null;              // last GET /api/config payload
+  let selectedProvider = "official"; // the value in the select (may differ from cfg)
 
   // Errors carry their key + vars (not a resolved string) so that a language
   // switch re-localizes an already-rendered failure without repeating the call.
@@ -285,8 +314,16 @@
           .join("");
       }
       const confHtml = conf === null || conf === undefined
-        ? `<span class="qtype">${t(lang, "answer.noConfidence")}</span>`
-        : `<span class="conf">${t(lang, "answer.confidence", { conf })}</span>`;
+        ? `<span class="qtype">${
+            a.confidence_source === "derived"
+              ? t(lang, "provider.confidence.derivedMissing")
+              : t(lang, "answer.noConfidence")
+          }</span>`
+        : `<span class="conf">${
+            a.confidence_source === "derived"
+              ? t(lang, "provider.confidence.derived")
+              : t(lang, "answer.confidence", { conf })
+          }</span>`;
       div.innerHTML = `
         <div class="ahead"><span class="qid">${esc(id)} <span class="qtype">· ${esc(a.type)}</span></span>${confHtml}</div>
         <div>${valueHtml}</div>
@@ -313,21 +350,37 @@
       const res = await fetch("/api/evaluate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ state, questions }),
+        body: JSON.stringify({
+          state,
+          questions,
+          // Omitted entirely when it matches the backend's own provider, so a
+          // default install keeps sending the historical two-key body.
+          ...(cfg && selectedProvider === cfg.provider ? {} : { provider: selectedProvider }),
+        }),
       });
       const data = await res.json().catch(() => ({}));
       const ms = Math.round(performance.now() - t0);
       if (!res.ok) {
-        if (res.status === 503) openSettings(); // guide to the secret settings
-        throw fail("err.http",
-          { status: res.status, error: data.error || t(lang, "err.http.fallback") },
-          data.detail ? " — " + data.detail : "");
+        if (res.status === 503) {
+          openSettings();            // guide to the settings panel
+          await refreshConfig();
+        }
+        lastResult = {
+          kind: "error",
+          error: fail("err.http",
+            { status: res.status, error: data.error || t(lang, "err.http.fallback") },
+            data.detail ? " — " + data.detail : ""),
+          provider: data.provider || null,
+        };
+        renderLastResult();
+        status.textContent = "";
+        return;
       }
       lastResult = { kind: "answers", data, ms };
       renderLastResult();
       status.textContent = "";
     } catch (err) {
-      lastResult = { kind: "error", error: err };
+      lastResult = { kind: "error", error: err, provider: null };
       renderLastResult();
       status.textContent = "";
     } finally {
@@ -341,14 +394,22 @@
     if (!lastResult) return;
     const panel = document.getElementById("resultPanel");
     panel.hidden = false;
+    const provLine = document.getElementById("respProvider");
     if (lastResult.kind === "error") {
       document.getElementById("answers").innerHTML =
         `<div class="answer"><span class="err">${esc(t(lang, "err.generic", { msg: errText(lastResult.error) }))}</span></div>`;
       document.getElementById("respMeta").textContent = "";
+      provLine.textContent = lastResult.provider
+        ? t(lang, "provider.label") + ": " + lastResult.provider
+        : "";
       return;
     }
     const { data, ms } = lastResult;
     renderAnswers(data.answers);
+    // The provider that actually answered, echoed by the backend (never inferred).
+    provLine.textContent = data.provider
+      ? t(lang, "provider.label") + ": " + data.provider
+      : "";
     document.getElementById("respMeta").textContent = t(lang, "resp.meta", {
       model: data.model || "?",
       in: data.usage?.input_tokens ?? "?",
@@ -357,7 +418,7 @@
     });
   }
 
-  // --- Secret settings (write-only: the browser never receives the value) ----
+  // --- provider settings (readable config; the key itself stays write-only) ---
   let keyConfigured = false;
 
   function openSettings() {
@@ -365,7 +426,53 @@
     document.getElementById("settingsBtn").setAttribute("aria-expanded", "true");
   }
 
-  function renderKeyStatus() {
+  const HINTS = {
+    official: "provider.hint.official",
+    laya: "provider.hint.laya",
+    "openai-compat": "provider.hint.openaiCompat",
+  };
+
+  const PROVIDER_LABEL_KEY = {
+    official: "provider.official",
+    laya: "provider.laya",
+    "openai-compat": "provider.openaiCompat",
+  };
+
+  // Readiness of *what the form currently holds* — the values the Save button
+  // would persist — so a field emptied for editing flips the line at once,
+  // instead of the line still describing the already-saved config.
+  function renderProviderReady() {
+    const el = document.getElementById("providerReady");
+    const preset = (cfg && cfg.defaults && cfg.defaults[selectedProvider]) || {};
+    const baseUrl = (document.getElementById("baseUrlInput").value || "").trim();
+    const model = (document.getElementById("modelInput").value || "").trim();
+    // The key slot is global (one key in config.json, shared by every provider),
+    // so its presence does not depend on which provider is selected.
+    const keyOk = keyConfigured;
+
+    const missingKey = Boolean(preset.keyRequired) && !keyOk;
+    const missingShape = Boolean(
+      (preset.baseUrlRequired && !baseUrl) || (preset.modelRequired && !model),
+    );
+
+    if (!missingKey && !missingShape) {
+      el.className = "hint confirm";
+      el.textContent = t(lang, "provider.status.ready", {
+        provider: t(lang, PROVIDER_LABEL_KEY[selectedProvider] || PROVIDER_LABEL_KEY.official),
+        model: model || preset.model || t(lang, "provider.model"),
+      });
+      return;
+    }
+    const reason = missingKey && missingShape
+      ? `${t(lang, "provider.status.needKey")} · ${t(lang, "provider.status.needModelBase")}`
+      : missingKey
+        ? t(lang, "provider.status.needKey")
+        : t(lang, "provider.status.needModelBase");
+    el.className = "hint";
+    el.textContent = t(lang, "provider.status.notReady", { reason });
+  }
+
+  function renderProviderStatus() {
     const status = document.getElementById("keyStatus");
     const hint = document.getElementById("keyHint");
     status.classList.toggle("clickable", keyConfigured);
@@ -378,26 +485,69 @@
       hint.textContent = t(lang, "key.hint.missing");
       document.getElementById("keyEditor").hidden = false;
     }
+    document.getElementById("providerHint").textContent =
+      t(lang, HINTS[selectedProvider] || HINTS.official);
+    // The key is mandatory for the hosted provider and optional for the local /
+    // self-hosted ones, so the label follows the selection rather than claiming
+    // "optional" in every case.
+    const keyRequired = Boolean(cfg && cfg.defaults && cfg.defaults[selectedProvider]?.keyRequired);
+    document.getElementById("keyLabel").textContent =
+      keyRequired ? t(lang, "settings.apiKey") : t(lang, "provider.key");
+    // The base-URL field is meaningless for the hosted provider (fixed endpoint);
+    // LAYA and OpenAI-compatible endpoints are both self-hosted, so it is shown.
+    document.getElementById("baseUrlRow").hidden = selectedProvider === "official";
+    renderProviderReady();
+  }
+
+  // Fill the form from the backend's config without clobbering what the user is
+  // typing: values are only overwritten when the field is not focused.
+  function applyConfig(data, { force } = {}) {
+    cfg = data;
+    selectedProvider = data.provider;
+    document.getElementById("providerSelect").value = data.provider;
+    const baseInput = document.getElementById("baseUrlInput");
+    const modelInput = document.getElementById("modelInput");
+    if (force || document.activeElement !== baseInput) baseInput.value = data.baseUrl || "";
+    if (force || document.activeElement !== modelInput) modelInput.value = data.model || "";
+    keyConfigured = data.keyConfigured === true;
+    renderProviderStatus();
+  }
+
+  async function refreshConfig(opts) {
+    try {
+      const res = await fetch("/api/config");
+      // Contract: this endpoint always answers 200, even on a fresh install.
+      const data = await res.json();
+      applyConfig(data, opts);
+    } catch {
+      /* the panel simply keeps its last known state */
+    }
   }
 
   function renderKeyNote() {
-    const msg = document.getElementById("keyMsg");
+    const msg = document.getElementById("providerMsg");
     if (!keyNote) { msg.textContent = ""; return; }
     const text = t(lang, keyNote.key, keyNote.vars);
     if (keyNote.kind === "plain") msg.textContent = text;
     else msg.innerHTML = `<span class="${keyNote.kind === "ok" ? "confirm" : "err"}">${esc(text)}</span>`;
   }
 
-  async function refreshKeyStatus() {
-    try {
-      const res = await fetch("/api/config/api-key/status");
-      const data = await res.json();
-      keyConfigured = data.configured === true;
-    } catch {
-      keyConfigured = false;
-    }
-    renderKeyStatus();
+  function fillProviderDefaults(next) {
+    // Switching provider shows that provider's defaults rather than the previous
+    // provider's values (the backend applies the same rule when saving). The
+    // defaults come from the backend so the page hardcodes none of them.
+    const d = (cfg && cfg.defaults && cfg.defaults[next]) || { baseUrl: "", model: "" };
+    document.getElementById("baseUrlInput").value = d.baseUrl || "";
+    document.getElementById("modelInput").value = d.model || "";
   }
+
+  document.getElementById("providerSelect").addEventListener("change", (e) => {
+    selectedProvider = e.target.value;
+    fillProviderDefaults(selectedProvider);
+    renderProviderStatus();
+    keyNote = null;
+    renderKeyNote();
+  });
 
   document.getElementById("keyStatus").addEventListener("click", () => {
     if (!keyConfigured) return; // the field is already open when nothing is stored
@@ -405,6 +555,45 @@
     document.getElementById("keyEditor").hidden = !editorOpen;
     if (editorOpen) document.getElementById("keyInput").focus();
   });
+
+  // Typing an endpoint/model flips the readiness line immediately, so the
+  // missing-field state of an unsaved selection is visible before Save.
+  document.getElementById("baseUrlInput").addEventListener("input", renderProviderReady);
+  document.getElementById("modelInput").addEventListener("input", renderProviderReady);
+
+  async function saveProvider() {
+    const btn = document.getElementById("saveProviderBtn");
+    const data = {
+      provider: selectedProvider,
+      baseUrl: document.getElementById("baseUrlInput").value.trim(),
+      model: document.getElementById("modelInput").value.trim(),
+    };
+    btn.disabled = true;
+    keyNote = { kind: "plain", key: "key.saving" };
+    renderKeyNote();
+    try {
+      const res = await fetch("/api/config", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(data),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body.error || `HTTP ${res.status}`);
+      await refreshConfig({ force: true });
+      keyNote = {
+        kind: "ok",
+        key: "provider.saved",
+        vars: { provider: body.provider, model: body.model },
+      };
+      renderKeyNote();
+    } catch (err) {
+      keyNote = { kind: "err", key: "provider.save.failed", vars: { msg: err.message } };
+      renderKeyNote();
+    } finally {
+      btn.disabled = false;
+    }
+  }
+  document.getElementById("saveProviderBtn").addEventListener("click", saveProvider);
 
   async function saveKey() {
     const input = document.getElementById("keyInput");
@@ -429,10 +618,9 @@
       input.value = ""; // clear immediately — the page never retains the secret
       keyConfigured = true;
       editorOpen = false;
-      renderKeyStatus();
+      renderProviderStatus();
       keyNote = { kind: "ok", key: "key.saved", vars: { len: data.length, fp: data.fingerprint } };
       renderKeyNote();
-      setTimeout(() => { keyNote = null; renderKeyNote(); }, 6000); // let the line fade out
     } catch (err) {
       keyNote = { kind: "err", key: "key.save.failed", vars: { msg: err.message } }; // input kept for retry
       renderKeyNote();
@@ -448,6 +636,7 @@
     const panel = document.getElementById("settingsPanel");
     panel.hidden = !panel.hidden;
     document.getElementById("settingsBtn").setAttribute("aria-expanded", String(!panel.hidden));
+    if (!panel.hidden) refreshConfig();
   });
 
   // --- language switch ------------------------------------------------------
@@ -455,7 +644,7 @@
     document.documentElement.lang = lang;
     applyStatic();
     for (const row of document.querySelectorAll(".qrow")) refreshRowHint(row);
-    renderKeyStatus();
+    if (cfg) renderProviderStatus();
     renderKeyNote();
     renderLastResult();
     if (asking) document.getElementById("status").textContent = t(lang, "ask.busy");
@@ -476,7 +665,7 @@
   document.getElementById("askBtn").addEventListener("click", ask);
   addQuestionRow({ type: "noul", instructions: "Does this convey urgency?" });
   addQuestionRow({ type: "score", instructions: "How frustrated is this customer?", criteria: ["calm", "frustrated", "very angry"] });
-  refreshKeyStatus();
+  await refreshConfig({ force: true });
   renderAll();
 </script>
 </body>

@@ -30,11 +30,11 @@ No dependencies to install; requires Node.js 18+.
 2. Click ⚙ Settings, paste your TypeSafe JeV API key, and save — it takes effect immediately, no restart.
 3. Edit the state text and questions, then click "Ask JeV".
 
-Prefer a key file? The backend reads one at startup from the generic path `~/.nebflow/secrets/<name>` (default name `typesafe-api-key`); a key pasted in the settings panel is stored at that same path with 0600 owner-only permissions (in-place rewrite that preserves the inode). Responses and logs carry only ok / length / last-4 fingerprint — the key itself is never echoed.
+Prefer a key file? Set `JEV_API_KEY` to the value, or let the settings panel create `config.json` in this project directory: it is written 0600 owner-only (in-place rewrite that preserves the inode) and is git-ignored. Responses and logs carry only ok / length / last-4 fingerprint — the key itself is never echoed.
 
 Missing or empty key file? The server still starts and logs `API key: not configured — set it in the WebUI settings`; evaluate requests then answer `503` with a hint until you paste a key in the settings panel — no restart needed.
 
-Optional environment overrides (see `server.mjs`): `PORT` (default 8791), `HOST`, `TYPESAFE_API_KEY_PATH`, `JEV_MAX_LIFETIME_MS`.
+Optional environment overrides (see `server.mjs`): `PORT` (default 8791), `HOST`, `JEV_API_KEY` (key value), `JEV_API_KEY_PATH` (explicit key-file path; the legacy alias `TYPESAFE_API_KEY_PATH` still works), `JEV_MAX_LIFETIME_MS`.
 
 ## Files
 
@@ -79,11 +79,11 @@ node server.mjs
 2. 点击 ⚙ 设置，粘贴 TypeSafe JeV 的 API key 并保存——立即生效，无需重启。
 3. 编辑状态文本与问题，点击 "Ask JeV" 提问。
 
-也可以用 key 文件：后端启动时从通用路径 `~/.nebflow/secrets/<name>`（默认名 `typesafe-api-key`）读取；在设置面板保存的 key 也会写在该路径，权限 0600 仅属主可读写（原地改写、保留 inode）。响应与日志只带 ok / 长度 / 末 4 位指纹——key 本身绝不回显。
+也可以用 key 文件：设置 `JEV_API_KEY` 直接给出 key 值，或让设置面板在本项目目录下生成 `config.json`——权限 0600 仅属主可读写（原地改写、保留 inode），且已被 git 忽略。响应与日志只带 ok / 长度 / 末 4 位指纹——key 本身绝不回显。
 
 缺少或为空的 key 文件不影响启动：服务照常启动并提示 `API key: not configured — set it in the WebUI settings`；此时提问会得到 `503` 与提示，直到在设置面板粘贴 key——无需重启。
 
-可选环境变量覆盖（见 `server.mjs`）：`PORT`（默认 8791）、`HOST`、`TYPESAFE_API_KEY_PATH`、`JEV_MAX_LIFETIME_MS`。
+可选环境变量覆盖（见 `server.mjs`）：`PORT`（默认 8791）、`HOST`、`JEV_API_KEY`（key 值）、`JEV_API_KEY_PATH`（显式 key 文件路径；旧名 `TYPESAFE_API_KEY_PATH` 仍可用）、`JEV_MAX_LIFETIME_MS`。
 
 ### 文件
 

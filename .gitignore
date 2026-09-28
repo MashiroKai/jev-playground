@@ -7,3 +7,6 @@ node_modules/
 *.key
 *.pem
 secrets/
+
+# Nebflow engine-local metadata (machine-local paths; not part of the project)
+project.json

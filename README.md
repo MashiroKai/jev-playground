@@ -78,7 +78,7 @@ Optional environment overrides (see `server.mjs`): `PORT` (default 8791), `HOST`
 
 [JeV](https://docs.typesafe.ai/introduction) 是 TypeSafe 的 JeV 模型：给它一段状态与若干条带类型的问题，它会以置信度形式回答。本工具是它的一层薄壳：浏览器页面负责收集 State 与任意多条问题行、逐条回显答案及置信度，并可整页切换中英文；零依赖的 Node.js 薄后端把请求转发到你在 ⚙ 设置里选定的 Provider（默认官方 JeV）。API key 绝不进入浏览器：它只存在于后端进程内，请求日志只记元数据，Authorization 头一律打码。
 
-> 仅供测试用途，非生产工具。
+> 试用工具，非生产用途。
 
 ### Provider
 
